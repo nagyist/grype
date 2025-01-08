@@ -11,10 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/anchore/grype/grype"
-	"github.com/anchore/grype/grype/db"
+	v5 "github.com/anchore/grype/grype/db/v5"
 	"github.com/anchore/grype/grype/match"
 	"github.com/anchore/grype/grype/pkg"
-	"github.com/anchore/grype/grype/store"
 	"github.com/anchore/syft/syft/source"
 )
 
@@ -55,17 +54,18 @@ func TestMatchBySBOMDocument(t *testing.T) {
 		{
 			name:        "unknown package type",
 			fixture:     "test-fixtures/sbom/syft-sbom-with-unknown-packages.json",
-			expectedIDs: []string{"CVE-bogus-my-package-2-python"},
+			expectedIDs: []string{"CVE-bogus-my-package-2-idris"},
 			expectedDetails: []match.Detail{
 				{
 					Type: match.ExactDirectMatch,
 					SearchedBy: map[string]interface{}{
-						"language":  "python",
-						"namespace": "github:language:python",
+						"language":  "idris",
+						"namespace": "github:language:idris",
+						"package":   map[string]string{"name": "my-package", "version": "1.0.5"},
 					},
 					Found: map[string]interface{}{
-						"versionConstraint": "< 2.0 (python)",
-						"vulnerabilityID":   "CVE-bogus-my-package-2-python",
+						"versionConstraint": "< 2.0 (unknown)",
+						"vulnerabilityID":   "CVE-bogus-my-package-2-idris",
 					},
 					Matcher:    match.StockMatcher,
 					Confidence: 1,
@@ -77,13 +77,14 @@ func TestMatchBySBOMDocument(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			mkStr := newMockDbStore()
-			vp, err := db.NewVulnerabilityProvider(mkStr)
+			vp, err := v5.NewVulnerabilityProvider(mkStr)
 			require.NoError(t, err)
-			ep := db.NewMatchExclusionProvider(mkStr)
-			str := store.Store{
-				Provider:          vp,
-				MetadataProvider:  nil,
-				ExclusionProvider: ep,
+			mp := v5.NewVulnerabilityMetadataProvider(mkStr)
+			ep := v5.NewMatchExclusionProvider(mkStr)
+			str := v5.ProviderStore{
+				VulnerabilityProvider:         vp,
+				VulnerabilityMetadataProvider: mp,
+				ExclusionProvider:             ep,
 			}
 			matches, _, _, err := grype.FindVulnerabilities(str, fmt.Sprintf("sbom:%s", test.fixture), source.SquashedScope, nil)
 			assert.NoError(t, err)

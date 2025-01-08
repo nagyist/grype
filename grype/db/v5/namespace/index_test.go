@@ -30,6 +30,8 @@ func TestFromStringSlice(t *testing.T) {
 				"nvd:cpe",
 				"github:language:ruby",
 				"abc.xyz:language:ruby",
+				"github:language:rust",
+				"something:language:rust",
 				"1234.4567:language:unknown",
 				"---:cpe",
 				"another-provider:distro:alpine:3.15",
@@ -43,6 +45,10 @@ func TestFromStringSlice(t *testing.T) {
 				syftPkg.Ruby: {
 					language.NewNamespace("github", syftPkg.Ruby, ""),
 					language.NewNamespace("abc.xyz", syftPkg.Ruby, ""),
+				},
+				syftPkg.Rust: {
+					language.NewNamespace("github", syftPkg.Rust, ""),
+					language.NewNamespace("something", syftPkg.Rust, ""),
 				},
 				syftPkg.Language("unknown"): {
 					language.NewNamespace("1234.4567", syftPkg.Language("unknown"), ""),
@@ -111,17 +117,20 @@ func TestIndex_CPENamespaces(t *testing.T) {
 }
 
 func newDistro(t *testing.T, dt osDistro.Type, v string, idLikes []string) *osDistro.Distro {
-	distro, err := osDistro.New(dt, v, idLikes...)
+	d, err := osDistro.New(dt, v, idLikes...)
 	assert.NoError(t, err)
-	return distro
+	return d
 }
 
 func TestIndex_NamespacesForDistro(t *testing.T) {
 	namespaceIndex, err := FromStrings([]string{
+		"alpine:distro:alpine:2.17",
 		"alpine:distro:alpine:3.15",
 		"alpine:distro:alpine:3.16",
+		"alpine:distro:alpine:4.13",
 		"alpine:distro:alpine:edge",
 		"debian:distro:debian:8",
+		"debian:distro:debian:unstable",
 		"amazon:distro:amazonlinux:2",
 		"amazon:distro:amazonlinux:2022",
 		"abc.xyz:distro:unknown:123.456",
@@ -130,10 +139,16 @@ func TestIndex_NamespacesForDistro(t *testing.T) {
 		"other-provider:distro:debian:8",
 		"other-provider:distro:redhat:9",
 		"suse:distro:sles:12.5",
+		"mariner:distro:mariner:2.0",
+		"mariner:distro:azurelinux:3.0",
 		"msrc:distro:windows:471816",
 		"ubuntu:distro:ubuntu:18.04",
+		"ubuntu:distro:ubuntu:18.10",
+		"ubuntu:distro:ubuntu:20.04",
+		"ubuntu:distro:ubuntu:20.10",
 		"oracle:distro:oraclelinux:8",
 		"wolfi:distro:wolfi:rolling",
+		"chainguard:distro:chainguard:rolling",
 		"archlinux:distro:archlinux:rolling",
 	})
 
@@ -152,10 +167,24 @@ func TestIndex_NamespacesForDistro(t *testing.T) {
 			},
 		},
 		{
-			name:   "alpine minor version with no patch should match edge",
+			name:   "alpine missing patch version matches with minor version",
 			distro: newDistro(t, osDistro.Alpine, "3.16", []string{}),
 			namespaces: []*distro.Namespace{
-				distro.NewNamespace("alpine", osDistro.Alpine, "edge"),
+				distro.NewNamespace("alpine", osDistro.Alpine, "3.16"),
+			},
+		},
+		{
+			name:   "alpine missing minor version uses latest minor version",
+			distro: newDistro(t, osDistro.Alpine, "3", []string{}),
+			namespaces: []*distro.Namespace{
+				distro.NewNamespace("alpine", osDistro.Alpine, "3.16"),
+			},
+		},
+		{
+			name:   "ubuntu missing minor version uses latest minor version",
+			distro: newDistro(t, osDistro.Ubuntu, "18", []string{}),
+			namespaces: []*distro.Namespace{
+				distro.NewNamespace("ubuntu", osDistro.Ubuntu, "18.10"),
 			},
 		},
 		{
@@ -196,10 +225,10 @@ func TestIndex_NamespacesForDistro(t *testing.T) {
 			},
 		},
 		{
-			name:   "alpine malformed version matches no namespace",
+			name:   "alpine malformed version matches with closest",
 			distro: newDistro(t, osDistro.Alpine, "3.16.4.5", []string{}),
 			namespaces: []*distro.Namespace{
-				distro.NewNamespace("alpine", osDistro.Alpine, "edge"),
+				distro.NewNamespace("alpine", osDistro.Alpine, "3.16"),
 			},
 		},
 		{
@@ -288,6 +317,20 @@ func TestIndex_NamespacesForDistro(t *testing.T) {
 			namespaces: nil,
 		},
 		{
+			name:   "Mariner 2.0 matches mariner namespace",
+			distro: newDistro(t, osDistro.Mariner, "2.0", []string{}),
+			namespaces: []*distro.Namespace{
+				distro.NewNamespace("mariner", "mariner", "2.0"),
+			},
+		},
+		{
+			name:   "azurelinux 3 is matched by mariner 3 namespace",
+			distro: newDistro(t, osDistro.Azure, "3.0", []string{}),
+			namespaces: []*distro.Namespace{
+				distro.NewNamespace("mariner", osDistro.Azure, "3.0"),
+			},
+		},
+		{
 			name:   "Oracle Linux Major semvar matches oracle namespace with exact version",
 			distro: newDistro(t, osDistro.OracleLinux, "8", []string{}),
 			namespaces: []*distro.Namespace{
@@ -312,6 +355,14 @@ func TestIndex_NamespacesForDistro(t *testing.T) {
 		},
 		{
 
+			name:   "Chainguard matches chainguard rolling namespace",
+			distro: newDistro(t, osDistro.Chainguard, "20230214", []string{}),
+			namespaces: []*distro.Namespace{
+				distro.NewNamespace("chainguard", osDistro.Chainguard, "rolling"),
+			},
+		},
+		{
+
 			name:       "Gentoo doesn't match any namespace since the gentoo rolling namespace doesn't exist in index",
 			distro:     newDistro(t, osDistro.Gentoo, "", []string{}),
 			namespaces: nil,
@@ -331,12 +382,23 @@ func TestIndex_NamespacesForDistro(t *testing.T) {
 			distro:     newDistro(t, osDistro.Busybox, "20.1", []string{}),
 			namespaces: nil,
 		},
+		{
+			name: "debian unstable",
+			distro: &osDistro.Distro{
+				Type:       osDistro.Debian,
+				RawVersion: "unstable",
+				Version:    nil,
+			},
+			namespaces: []*distro.Namespace{
+				distro.NewNamespace("debian", osDistro.Debian, "unstable"),
+			},
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			namespaces := namespaceIndex.NamespacesForDistro(test.distro)
-			assert.Equal(t, test.namespaces, namespaces)
+			assert.ElementsMatch(t, test.namespaces, namespaces)
 		})
 	}
 }
