@@ -5,8 +5,8 @@ import (
 	"github.com/wagoodman/go-progress"
 
 	v4 "github.com/anchore/grype/grype/db/v4"
-	diffEvents "github.com/anchore/grype/grype/differ/events"
 	"github.com/anchore/grype/grype/event"
+	"github.com/anchore/grype/grype/event/monitor"
 	"github.com/anchore/grype/internal/bus"
 )
 
@@ -32,18 +32,21 @@ type storeMetadata struct {
 }
 
 // create manual progress bars for tracking the database diff's progress
-func trackDiff() (*progress.Manual, *progress.Manual) {
-	rowsProcessed := progress.Manual{}
-	differencesDiscovered := progress.Manual{}
+func trackDiff(total int64) (*progress.Manual, *progress.Manual, *progress.Stage) {
+	stageProgress := &progress.Manual{}
+	stageProgress.SetTotal(total)
+	differencesDiscovered := &progress.Manual{}
+	stager := &progress.Stage{}
 
 	bus.Publish(partybus.Event{
 		Type: event.DatabaseDiffingStarted,
-		Value: diffEvents.Monitor{
-			RowsProcessed:         progress.Monitorable(&rowsProcessed),
-			DifferencesDiscovered: progress.Monitorable(&differencesDiscovered),
+		Value: monitor.DBDiff{
+			Stager:                stager,
+			StageProgress:         progress.Progressable(stageProgress),
+			DifferencesDiscovered: progress.Monitorable(differencesDiscovered),
 		},
 	})
-	return &rowsProcessed, &differencesDiscovered
+	return stageProgress, differencesDiscovered, stager
 }
 
 // creates a map from an unpackaged key to a list of all packages associated with it
@@ -193,14 +196,14 @@ func diffVulnerabilities(baseModels, targetModels *[]v4.Vulnerability, basePkgsM
 					continue
 				}
 				diffs[k.id+k.namespace] = createDiff(basePkgsMap, targetPkgsMap, k, v4.DiffChanged)
-				differentItems.N++
+				differentItems.Increment()
 			}
 		} else {
 			if _, exists := diffs[k.id+k.namespace]; exists {
 				continue
 			}
 			diffs[k.id+k.namespace] = createDiff(nil, targetPkgsMap, k, v4.DiffAdded)
-			differentItems.N++
+			differentItems.Increment()
 		}
 	}
 	notSeen, partialSeen := m.getUnmatched()
@@ -209,14 +212,14 @@ func diffVulnerabilities(baseModels, targetModels *[]v4.Vulnerability, basePkgsM
 			continue
 		}
 		diffs[k.id+k.namespace] = createDiff(basePkgsMap, targetPkgsMap, k, v4.DiffChanged)
-		differentItems.N++
+		differentItems.Increment()
 	}
 	for _, k := range notSeen {
 		if _, exists := diffs[k.id+k.namespace]; exists {
 			continue
 		}
 		diffs[k.id+k.namespace] = createDiff(basePkgsMap, nil, k, v4.DiffRemoved)
-		differentItems.N++
+		differentItems.Increment()
 	}
 
 	return &diffs
@@ -276,14 +279,14 @@ func diffVulnerabilityMetadata(baseModels, targetModels *[]v4.VulnerabilityMetad
 					continue
 				}
 				diffs[k.id+k.namespace] = createDiff(basePkgsMap, targetPkgsMap, k, v4.DiffChanged)
-				differentItems.N++
+				differentItems.Increment()
 			}
 		} else {
 			if _, exists := diffs[k.id+k.namespace]; exists {
 				continue
 			}
 			diffs[k.id+k.namespace] = createDiff(nil, targetPkgsMap, k, v4.DiffAdded)
-			differentItems.N++
+			differentItems.Increment()
 		}
 	}
 	for _, k := range m.getUnmatched() {
@@ -291,7 +294,7 @@ func diffVulnerabilityMetadata(baseModels, targetModels *[]v4.VulnerabilityMetad
 			continue
 		}
 		diffs[k.id+k.namespace] = createDiff(basePkgsMap, nil, k, v4.DiffRemoved)
-		differentItems.N++
+		differentItems.Increment()
 	}
 
 	return &diffs
