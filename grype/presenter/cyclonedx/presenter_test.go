@@ -5,11 +5,12 @@ import (
 	"flag"
 	"testing"
 
-	"github.com/sergi/go-diff/diffmatchpatch"
+	"github.com/stretchr/testify/require"
 
+	"github.com/anchore/clio"
 	"github.com/anchore/go-testutils"
+	"github.com/anchore/grype/grype/presenter/internal"
 	"github.com/anchore/grype/grype/presenter/models"
-	"github.com/anchore/syft/syft/source"
 )
 
 var update = flag.Bool("update", false, "update the *.golden files for cyclonedx presenters")
@@ -17,9 +18,20 @@ var update = flag.Bool("update", false, "update the *.golden files for cyclonedx
 func TestCycloneDxPresenterImage(t *testing.T) {
 	var buffer bytes.Buffer
 
-	matches, packages, context, metadataProvider, _, _ := models.GenerateAnalysis(t, source.ImageScheme)
+	sbom, matches, packages, context, metadataProvider, _, _ := internal.GenerateAnalysis(t, internal.ImageSource)
+	pb := models.PresenterConfig{
+		ID: clio.Identification{
+			Name:    "grype",
+			Version: "[not provided]",
+		},
+		Matches:          matches,
+		Packages:         packages,
+		Context:          context,
+		MetadataProvider: metadataProvider,
+		SBOM:             sbom,
+	}
 
-	pres := NewPresenter(matches, packages, context.Source, metadataProvider)
+	pres := NewJSONPresenter(pb)
 	// run presenter
 	err := pres.Present(&buffer)
 	if err != nil {
@@ -34,22 +46,28 @@ func TestCycloneDxPresenterImage(t *testing.T) {
 	var expected = testutils.GetGoldenFileContents(t)
 
 	// remove dynamic values, which are tested independently
-	actual = models.Redact(actual)
-	expected = models.Redact(expected)
+	actual = internal.Redact(actual)
+	expected = internal.Redact(expected)
 
-	if !bytes.Equal(expected, actual) {
-		dmp := diffmatchpatch.New()
-		diffs := dmp.DiffMain(string(expected), string(actual), true)
-		t.Errorf("mismatched output:\n%s", dmp.DiffPrettyText(diffs))
-	}
-
+	require.JSONEq(t, string(expected), string(actual))
 }
 
 func TestCycloneDxPresenterDir(t *testing.T) {
 	var buffer bytes.Buffer
-	matches, packages, ctx, metadataProvider, _, _ := models.GenerateAnalysis(t, source.DirectoryScheme)
+	sbom, matches, packages, ctx, metadataProvider, _, _ := internal.GenerateAnalysis(t, internal.DirectorySource)
+	pb := models.PresenterConfig{
+		ID: clio.Identification{
+			Name:    "grype",
+			Version: "[not provided]",
+		},
+		Matches:          matches,
+		Packages:         packages,
+		Context:          ctx,
+		MetadataProvider: metadataProvider,
+		SBOM:             sbom,
+	}
 
-	pres := NewPresenter(matches, packages, ctx.Source, metadataProvider)
+	pres := NewJSONPresenter(pb)
 
 	// run presenter
 	err := pres.Present(&buffer)
@@ -65,13 +83,8 @@ func TestCycloneDxPresenterDir(t *testing.T) {
 	var expected = testutils.GetGoldenFileContents(t)
 
 	// remove dynamic values, which are tested independently
-	actual = models.Redact(actual)
-	expected = models.Redact(expected)
+	actual = internal.Redact(actual)
+	expected = internal.Redact(expected)
 
-	if !bytes.Equal(expected, actual) {
-		dmp := diffmatchpatch.New()
-		diffs := dmp.DiffMain(string(expected), string(actual), true)
-		t.Errorf("mismatched output:\n%s", dmp.DiffPrettyText(diffs))
-	}
-
+	require.JSONEq(t, string(expected), string(actual))
 }

@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"sort"
 
+	_ "github.com/glebarez/sqlite" // provide the sqlite dialect to gorm via import
 	"github.com/go-test/deep"
 	"gorm.io/gorm"
 
 	"github.com/anchore/grype/grype/db/internal/gormadapter"
 	v5 "github.com/anchore/grype/grype/db/v5"
 	"github.com/anchore/grype/grype/db/v5/store/model"
-	"github.com/anchore/grype/internal"
-	_ "github.com/anchore/sqlite" // provide the sqlite dialect to gorm via import
+	"github.com/anchore/grype/internal/stringutil"
 )
 
 // store holds an instance of the database connection
@@ -19,29 +19,20 @@ type store struct {
 	db *gorm.DB
 }
 
+func models() []any {
+	return []any{
+		model.IDModel{},
+		model.VulnerabilityModel{},
+		model.VulnerabilityMetadataModel{},
+		model.VulnerabilityMatchExclusionModel{},
+	}
+}
+
 // New creates a new instance of the store.
 func New(dbFilePath string, overwrite bool) (v5.Store, error) {
-	db, err := gormadapter.Open(dbFilePath, overwrite)
+	db, err := gormadapter.Open(dbFilePath, gormadapter.WithTruncate(overwrite, models(), nil))
 	if err != nil {
 		return nil, err
-	}
-
-	if overwrite {
-		// TODO: automigrate could write to the database,
-		//  we should be validating the database is the correct database based on the version in the ID table before
-		//  automigrating
-		if err := db.AutoMigrate(&model.IDModel{}); err != nil {
-			return nil, fmt.Errorf("unable to migrate ID model: %w", err)
-		}
-		if err := db.AutoMigrate(&model.VulnerabilityModel{}); err != nil {
-			return nil, fmt.Errorf("unable to migrate Vulnerability model: %w", err)
-		}
-		if err := db.AutoMigrate(&model.VulnerabilityMetadataModel{}); err != nil {
-			return nil, fmt.Errorf("unable to migrate Vulnerability Metadata model: %w", err)
-		}
-		if err := db.AutoMigrate(&model.VulnerabilityMatchExclusionModel{}); err != nil {
-			return nil, fmt.Errorf("unable to migrate Vulnerability Match Exclusion model: %w", err)
-		}
 	}
 
 	return &store{
@@ -99,7 +90,13 @@ func (s *store) GetVulnerabilityNamespaces() ([]string, error) {
 func (s *store) GetVulnerability(namespace, id string) ([]v5.Vulnerability, error) {
 	var models []model.VulnerabilityModel
 
-	result := s.db.Where("namespace = ? AND id = ?", namespace, id).Find(&models)
+	query := s.db.Where("id = ?", id)
+
+	if namespace != "" {
+		query = query.Where("namespace = ?", namespace)
+	}
+
+	result := query.Find(&models)
 
 	var vulnerabilities = make([]v5.Vulnerability, len(models))
 	for idx, m := range models {
@@ -207,7 +204,7 @@ func (s *store) AddVulnerabilityMetadata(metadata ...v5.VulnerabilityMetadata) e
 				existing.Cvss = append(existing.Cvss, incomingCvss)
 			}
 
-			links := internal.NewStringSetFromSlice(existing.URLs)
+			links := stringutil.NewStringSetFromSlice(existing.URLs)
 			for _, l := range m.URLs {
 				links.Add(l)
 			}
@@ -280,13 +277,15 @@ func (s *store) AddVulnerabilityMatchExclusion(exclusions ...v5.VulnerabilityMat
 	return nil
 }
 
-func (s *store) Close() {
+func (s *store) Close() error {
 	s.db.Exec("VACUUM;")
 
-	sqlDB, err := s.db.DB()
-	if err != nil {
+	sqlDB, _ := s.db.DB()
+	if sqlDB != nil {
 		_ = sqlDB.Close()
 	}
+
+	return nil
 }
 
 // GetAllVulnerabilities gets all vulnerabilities in the database
@@ -325,37 +324,45 @@ func (s *store) GetAllVulnerabilityMetadata() (*[]v5.VulnerabilityMetadata, erro
 
 // DiffStore creates a diff between the current sql database and the given store
 func (s *store) DiffStore(targetStore v5.StoreReader) (*[]v5.Diff, error) {
-	rowsProgress, diffItems := trackDiff()
+	// 7 stages, one for each step of the diff process (stages)
+	rowsProgress, diffItems, stager := trackDiff(7)
 
+	stager.Current = "reading target vulnerabilities"
 	targetVulns, err := targetStore.GetAllVulnerabilities()
-	rowsProgress.N++
+	rowsProgress.Increment()
 	if err != nil {
 		return nil, err
 	}
 
+	stager.Current = "reading base vulnerabilities"
 	baseVulns, err := s.GetAllVulnerabilities()
-	rowsProgress.N++
+	rowsProgress.Increment()
 	if err != nil {
 		return nil, err
 	}
 
+	stager.Current = "preparing"
 	baseVulnPkgMap := buildVulnerabilityPkgsMap(baseVulns)
 	targetVulnPkgMap := buildVulnerabilityPkgsMap(targetVulns)
 
+	stager.Current = "comparing vulnerabilities"
 	allDiffsMap := diffVulnerabilities(baseVulns, targetVulns, baseVulnPkgMap, targetVulnPkgMap, diffItems)
 
+	stager.Current = "reading base metadata"
 	baseMetadata, err := s.GetAllVulnerabilityMetadata()
 	if err != nil {
 		return nil, err
 	}
-	rowsProgress.N++
+	rowsProgress.Increment()
 
+	stager.Current = "reading target metadata"
 	targetMetadata, err := targetStore.GetAllVulnerabilityMetadata()
 	if err != nil {
 		return nil, err
 	}
-	rowsProgress.N++
+	rowsProgress.Increment()
 
+	stager.Current = "comparing metadata"
 	metaDiffsMap := diffVulnerabilityMetadata(baseMetadata, targetMetadata, baseVulnPkgMap, targetVulnPkgMap, diffItems)
 	for k, diff := range *metaDiffsMap {
 		(*allDiffsMap)[k] = diff
